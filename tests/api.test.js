@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { aliceResponse, fitAliceText, isSearchIntent, safeHistory } from "../api/index.js";
+import handler, { aliceResponse, fitAliceText, isSearchIntent, safeHistory } from "../api/index.js";
 
 test("Alice response uses required response envelope", () => {
   const result = aliceResponse("Привет", false, [{ role: "user", text: "тест" }]);
@@ -61,3 +61,23 @@ test("launch request returns a valid Alice greeting without external API keys", 
   assert.match(payload.response.text, /Привет/);
   assert.equal(payload.response.end_session, false);
 });
+
+test("upstream AbortError gives a timeout message and preserves previous history", async t => {
+  const previousKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = "test-placeholder-key";
+  t.after(() => {
+    if (previousKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = previousKey;
+  });
+  t.mock.method(globalThis, "fetch", async () => {
+    throw new DOMException("This operation was aborted", "AbortError");
+  });
+  const oldHistory = [{ role: "user", text: "Старый вопрос" }, { role: "model", text: "Старый ответ" }];
+  let payload;
+  const res = { status() { return this; }, json(value) { payload = value; return value; } };
+  await handler({ method: "POST", body: { request: { command: "два плюс два" }, state: { session: { history: oldHistory } } } }, res);
+  assert.match(payload.response.text, /Не успела подготовить ответ/);
+  assert.deepEqual(payload.session_state.history, oldHistory);
+});
+
+
